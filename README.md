@@ -57,7 +57,7 @@ C++11対応で可変長引数テンプレートとか使える環境が必要で
 
 		// クラスにコンストラクターを２種バインド
 		sqwrap::Class<Hoge> hoge;
-		hoge.Ctor().Ctor<int>();
+		hoge().New<>().New<int>();
 
 		// 他は関数と同じ
 		hoge["Mathod"] <= Hoge::Mathod;
