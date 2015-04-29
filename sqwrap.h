@@ -3,82 +3,28 @@
 //  sqwrap - simple Squirrel binder with function overload.
 //
 //===========================================================================
-
 #include <limits>
 #include <string>
 #include <sstream>
 #include <exception>
-#include <mem.h>
+#include <assert.h>
 
-// チェックの有無を切り替え
-#ifndef SQWRAP_NOCHECK
-	#define SQ_SETPARAMSCHECK(v,n,p) sq_setparamscheck(v,n,p)
-	#define SQ_SETNATIVECLOSURENAME(v,i,n) sq_setnativeclosurename(v,i,n)
-#else
-	#define SQ_SETPARAMSCHECK(vm,n,p)
-	#define SQ_SETNATIVECLOSURENAME(v,i,p)
-#endif
-
-// 引数テンプレ
-#define __C1__ class A1
-#define __C2__ class A1, class A2
-#define __C3__ class A1, class A2, class A3
-#define __C4__ class A1, class A2, class A3, class A4
-#define __C5__ class A1, class A2, class A3, class A4, class A5
-#define __C6__ class A1, class A2, class A3, class A4, class A5, class A6
-#define __C7__ class A1, class A2, class A3, class A4, class A5, class A6, class A7
-#define __C8__ class A1, class A2, class A3, class A4, class A5, class A6, class A7, class A8
-#define __A1__ A1
-#define __A2__ A1,A2
-#define __A3__ A1,A2,A3
-#define __A4__ A1,A2,A3,A4
-#define __A5__ A1,A2,A3,A4,A5
-#define __A6__ A1,A2,A3,A4,A5,A6
-#define __A7__ A1,A2,A3,A4,A5,A6,A7
-#define __A8__ A1,A2,A3,A4,A5,A6,A7,A8
-
-// 例外キャッチ
-#define __CATCH__ catch(std::exception& e){ return sq_throwerror(v, e.what()); }
+#include <squirrel.h>
 
 namespace sqwrap{
-namespace implements{
-	// 型の略称
-	typedef SQObjectType type_t;
-	typedef SQInteger int_t;
-	typedef SQFloat real_t;
-	typedef SQBool bool_t;
-	typedef SQChar char_t;
-	typedef SQUserPointer ptr_t;
-	typedef const SQChar* cstr_t;
-	typedef std::basic_string<SQChar> str_t;
-	typedef std::basic_stringstream<SQChar> stream_t;
+namespace detail{
+	typedef const SQChar* SQcstr;
+	typedef std::basic_string<SQChar> SQstring;
+	typedef std::basic_stringstream<SQChar> SQsstream;
 
-	// オブジェクト生成
-	int_t newtable(HSQUIRRELVM vm){ sq_newtable(vm); return sq_gettop(vm); }
-	int_t newclass(HSQUIRRELVM vm){ sq_newclass(vm,false); return sq_gettop(vm); }
-	int_t newarray(HSQUIRRELVM vm, int_t size){ sq_newarray(vm,size); return sq_gettop(vm); }
-
-	// パラメータエラー
-	std::runtime_error param_error(int index, cstr_t type){
-		stream_t s;
-		s << "parameter " << (index-1) << " is not " << type;
-		return std::runtime_error(s.str());
+	SQInteger newtable(HSQUIRRELVM vm){
+		sq_newtable(vm);
+		return sq_gettop(vm);
 	}
-
-	// スロット登録
-	void bind(HSQUIRRELVM vm, int_t base, cstr_t name, int_t index){
-		sq_pushstring(vm, name, -1);
-		sq_push(vm, index);
-		sq_newslot(vm, base, false);
+	SQInteger newarray(HSQUIRRELVM vm, SQInteger size){
+		sq_newarray(vm, size);
+		return sq_gettop(vm);
 	}
-
-	// スタック保持
-	struct section_t{
-		const HSQUIRRELVM vm_;
-		const int_t base_;
-		section_t(HSQUIRRELVM vm):vm_(vm), base_(sq_gettop(vm)){}
-		~section_t(){ sq_settop(vm_,base_); }
-	};
 
 
 //---------------------------------------------------------------------------
@@ -89,539 +35,452 @@ namespace implements{
 		bool I=std::numeric_limits<T>::is_integer>
 	struct X{};
 
-	// INTEGER
+	// Integer
 	template <class T>
-	struct X<T,true,true>{
-		static const char_t m = 'n';
-		static const char_t t = m;
-		static void put(HSQUIRRELVM v, T val){ sq_pushinteger(v,val); }
-		static T get(HSQUIRRELVM v, int_t i){
-			int_t  a; if(SQ_SUCCEEDED(sq_getinteger(v,i,&a)))return static_cast<T>(a);
-			bool_t b; if(SQ_SUCCEEDED(sq_getbool(v,i,&b)))return static_cast<T>(b);
-			throw param_error(i,"integer");
+	struct X<T, true, true>{
+		static const char mask = 'n';
+		static const char tag  = 'i';
+		static void push(HSQUIRRELVM vm, T val){ sq_pushinteger(vm, val); }
+		static T get(HSQUIRRELVM vm, SQInteger index){
+			SQInteger i;
+			sq_getinteger(vm, index, &i);
+			return static_cast<T>(i);
 		}
 	};
-	// FLOAT
+
+	// Float
 	template <class T>
-	struct X<T,true,false>{
-		static const char_t m = 'n';
-		static const char_t t = m;
-		static str_t s(){ return _SC("n"); }
-		static void put(HSQUIRRELVM v, T val){ sq_pushfloat(v,val); }
-		static T get(HSQUIRRELVM v, int_t i){
-			real_t a; if(SQ_SUCCEEDED(sq_getfloat(v,i,&a)))return static_cast<T>(a);
-			int_t  b; if(SQ_SUCCEEDED(sq_getinteger(v,i,&b)))return static_cast<T>(b);
-			throw param_error(i,"float");
+	struct X<T, true, false>{
+		static const char mask = 'n';
+		static const char tag  = 'f';
+		static void push(HSQUIRRELVM vm, T val){ sq_pushfloat(vm, val); }
+		static T get(HSQUIRRELVM vm, SQInteger index){
+			SQFloat f;
+			sq_getfloat(vm, index, &f);
+			return static_cast<T>(f);
 		}
 	};
-	// BOOL
+
+	// Bool
 	template <>
-	struct X<bool,false,false>{
-		static const char_t m = 'b';
-		static const char_t t = m;
-		static str_t s(){ return _SC("b"); }
-		static void put(HSQUIRRELVM v, bool val){ sq_pushbool(v,val); }
-		static bool get(HSQUIRRELVM v, int_t i){ bool_t b; sq_tobool(v, i, &b); return static_cast<bool>(b); }
-	};
-	// STRING
-	template <>
-	struct X<cstr_t,false,false>{
-		static const char_t m = 's';
-		static const char_t t = m;
-		static str_t s(){ return _SC("s"); }
-		static void put(HSQUIRRELVM v, cstr_t val){ sq_pushstring(v,val,-1); }
-		static cstr_t get(HSQUIRRELVM v, int_t i){
-			cstr_t s;
-			if(SQ_SUCCEEDED(sq_getstring(v, i, &s)))return s;
-			throw param_error(i,"string");
+	struct X<bool>{
+		static const char mask = 'b';
+		static const char tag  = 'b';
+		static void push(HSQUIRRELVM vm, bool val){ sq_pushbool(vm, val); }
+		static bool get(HSQUIRRELVM vm, SQInteger index){
+			SQBool b;
+			sq_tobool(vm, index, &b);
+			return (b != SQFalse);
 		}
 	};
+
+	// C String
+	template <>
+	struct X<SQcstr>{
+		static const char mask = 's';
+		static const char tag  = 's';
+		static void push(HSQUIRRELVM vm, SQcstr val){ sq_pushstring(vm, val, -1); }
+		static SQcstr get(HSQUIRRELVM vm, SQInteger index){
+			SQcstr s;
+			sq_getstring(vm, index, &s);
+			return s;
+		}
+	};
+
+	// stl String
+	template <>
+	struct X<SQstring, false,false>{
+		static const char mask = 's';
+		static const char tag  = 's';
+		static void push(HSQUIRRELVM vm, SQstring val){ sq_pushstring(vm, val.c_str(), val.length()); }
+		static SQstring get(HSQUIRRELVM vm, SQInteger index){
+			SQcstr s;
+			sq_getstring(vm, index, &s);
+			return SQstring(s);
+		}
+	};
+
 	// CLASS
 	template <class T>
-	struct X<T*,false,false>{
-		static const char_t m = 'x';
-		static const cstr_t t;
-		static ptr_t tag(){ return const_cast<char_t*>(t); }
-		static HSQOBJECT id;
-		static int_t init(HSQUIRRELVM v){
-			if(sq_isclass(id)){
-				sq_pushobject(v,id);
+	struct X<T,false,false>{
+		static const char mask = 'x';
+		static const char* tag;
+		static HSQOBJECT obj;
+		static void push_class(HSQUIRRELVM vm){
+			if(sq_isclass(obj)){
+				sq_pushobject(vm, obj);
 			}else{
-				sq_newclass(v, false);
-				sq_getstackobj(v, -1, &id);
-				sq_settypetag(v, -1, tag());
-				sq_addref(v, &id);
+				sq_newclass(vm, SQFalse);
+				sq_getstackobj(vm, -1, &obj);
+				sq_addref(vm, &obj);
 			}
-			return sq_gettop(v);
 		}
-		static int_t construct(HSQUIRRELVM v, ptr_t p){
-			sq_setinstanceup(v, 1, p);
-			sq_setreleasehook(v, 1, destructor);
+		static void push(HSQUIRRELVM vm, T& val){
+			push_class(vm);
+			sq_createinstance(vm, -1);
+			sq_remove(vm, -2);
+			sq_setinstanceup(vm, -1, &val);
 		}
-		static int_t destructor(ptr_t p, int_t){ delete static_cast<T*>(p); return 0; }
-		static void put(HSQUIRRELVM v, T* val){
-			init(v);
-			sq_createinstance(v,-1);
-			sq_remove(v,-2);
-			sq_setinstanceup(v,-1,val);
-		}
-		static T* get(HSQUIRRELVM v, int_t i){
-			ptr_t p=0;
-			if(SQ_SUCCEEDED(sq_getinstanceup(v,i,&p,tag())))return static_cast<T*>(p);
-			throw param_error(i,typeid(T).name());
+		static T& get(HSQUIRRELVM vm, SQInteger index){
+			SQUserPointer p = nullptr;
+			sq_getinstanceup(vm, index, &p, 0);
+			return *static_cast<T*>(p);
 		}
 	};
-	template <class T> const cstr_t X<T*,false,false>::t = typeid(T).name();
-	template <class T> HSQOBJECT X<T*,false,false>::id;
+	template <class T> const char* X<T, false, false>::tag = typeid(T).name();
+	template <class T> HSQOBJECT X<T, false, false>::obj;
 
-
-//---------------------------------------------------------------------------
-//	関数用ヘルパ
-//---------------------------------------------------------------------------
-
-	// 戻り値アクセス
-	struct Res{
-		const HSQUIRRELVM vm;
-		const int_t base;
-		Res(HSQUIRRELVM v):vm(v), base(sq_gettop(v)){}
-		template <class T> operator ()(const T& res){ X<T>::put(vm, res); }
-		operator int_t()const{ return sq_gettop(vm) - base; }
-	};
-	// 引数アクセス
-	struct Arg{
-		const HSQUIRRELVM vm;
-		const int_t size;
-		Arg(HSQUIRRELVM v): vm(v), size(sq_gettop(v)){}
-		struct Val{
-			const HSQUIRRELVM vm;
-			const int_t id;
-			Val(HSQUIRRELVM v, int_t i): vm(v), id(i){}
-			template <class T> operator T()const{ return X<T>::get(vm, id); }
-		};
-		Val operator[](int_t i)const{
-			++i;
-			if(size<i)throw param_error(i,"avail");
-			return Val(vm, i);
+	// CLASS pointer
+	template <class T>
+	struct X<T*,false,false> : X<T,false,false>{
+		static void push(HSQUIRRELVM vm, T* val){
+			push_class(vm);
+			sq_createinstance(vm, -1);
+			sq_remove(vm, -2);
+			sq_setinstanceup(vm, -1, val);
+		}
+		static T* get(HSQUIRRELVM vm, SQInteger index){
+			SQUserPointer p = nullptr;
+			sq_getinstanceup(vm, index, &p, 0);
+			return static_cast<T*>(p);
 		}
 	};
-
-	// 関数用ヘルパ
-	template <class F> F GetFunc(HSQUIRRELVM v){
-		F f;
-		sq_getuserpointer(v, -1, reinterpret_cast<ptr_t*>(&f));
-		return f;
-	}
-
-	// メンバ関数用ヘルパ
-	template <class M>
-	M GetMethod(HSQUIRRELVM v){
-		M* f;
-		sq_getuserdata(v, -1, reinterpret_cast<ptr_t*>(&f), NULL);
-		return *f;
-	}
-	template <class C>
-	C* GetInst(HSQUIRRELVM v){
-		return X<C*>::get(v, 1);
-	}
-
-	// 登録用ヘルパ
-	void BindFuncProxy(HSQUIRRELVM v, void* f, SQFUNCTION sf){
-		sq_pushuserpointer(v, f);
-		sq_newclosure(v, sf, 1);
-	}
-	void BindMethodProxy(HSQUIRRELVM v, void* m, size_t size, SQFUNCTION sf){
-		memcpy(sq_newuserdata(v, size), m, size);
-		sq_newclosure(v, sf, 1);
-	}
-
-
-//---------------------------------------------------------------------------
-//	引数解析（実行時）
-//---------------------------------------------------------------------------
-	str_t ArgsSummary(HSQUIRRELVM vm){
-		size_t size = sq_gettop(vm);
-		stream_t s;
-		for(size_t i=2; i<=size; ++i){
-			switch(sq_gettype(vm, i)){
-			case OT_INTEGER: s << 'n'; continue;
-			case OT_FLOAT:   s << 'n'; continue;
-			case OT_BOOL:    s << 'b'; continue;
-			case OT_STRING:  s << 's'; continue;
-			}
-			ptr_t tag=0;
-			sq_gettypetag(vm,i,&tag);
-			if(tag){ s << static_cast<cstr_t>(tag); }
-		}
-		return s.str();
-	}
-
-//---------------------------------------------------------------------------
-//	引数解析（登録時）
-//---------------------------------------------------------------------------
-	// ベース
-	str_t ArgsSummaryT(){ return str_t(); }
-	template <__C1__> str_t ArgsSummaryT(){ return str_t() + X<A1>::t; }
-	template <__C2__> str_t ArgsSummaryT(){ return str_t() + X<A1>::t + X<A2>::t; }
-	template <__C3__> str_t ArgsSummaryT(){ return str_t() + X<A1>::t + X<A2>::t + X<A3>::t; }
-	template <__C4__> str_t ArgsSummaryT(){ return str_t() + X<A1>::t + X<A2>::t + X<A3>::t + X<A4>::t; }
-	template <__C5__> str_t ArgsSummaryT(){ return str_t() + X<A1>::t + X<A2>::t + X<A3>::t + X<A4>::t + X<A5>::t; }
-	template <__C6__> str_t ArgsSummaryT(){ return str_t() + X<A1>::t + X<A2>::t + X<A3>::t + X<A4>::t + X<A5>::t + X<A6>::t; }
-	template <__C7__> str_t ArgsSummaryT(){ return str_t() + X<A1>::t + X<A2>::t + X<A3>::t + X<A4>::t + X<A5>::t + X<A6>::t + X<A7>::t; }
-	template <__C8__> str_t ArgsSummaryT(){ return str_t() + X<A1>::t + X<A2>::t + X<A3>::t + X<A4>::t + X<A5>::t + X<A6>::t + X<A7>::t + X<A8>::t; }
-
-	// 通常関数
-	template <class R> str_t ArgsSummary(R(*)()){ return ArgsSummaryT(); }
-	template <class R, __C1__> str_t ArgsSummary(R(*)(__A1__)){ return ArgsSummaryT<__A1__>(); }
-	template <class R, __C2__> str_t ArgsSummary(R(*)(__A2__)){ return ArgsSummaryT<__A2__>(); }
-	template <class R, __C3__> str_t ArgsSummary(R(*)(__A3__)){ return ArgsSummaryT<__A3__>(); }
-	template <class R, __C4__> str_t ArgsSummary(R(*)(__A4__)){ return ArgsSummaryT<__A4__>(); }
-	template <class R, __C5__> str_t ArgsSummary(R(*)(__A5__)){ return ArgsSummaryT<__A5__>(); }
-	template <class R, __C6__> str_t ArgsSummary(R(*)(__A6__)){ return ArgsSummaryT<__A6__>(); }
-	template <class R, __C7__> str_t ArgsSummary(R(*)(__A7__)){ return ArgsSummaryT<__A7__>(); }
-	template <class R, __C8__> str_t ArgsSummary(R(*)(__A8__)){ return ArgsSummaryT<__A8__>(); }
-	// メンバ関数
-	template <class C, class R> str_t ArgsSummary(R(C::*)()){ return ArgsSummaryT(); }
-	template <class C, class R, __C1__> str_t ArgsSummary(R(C::*)(__A1__)){ return ArgsSummaryT<__A1__>(); }
-	template <class C, class R, __C2__> str_t ArgsSummary(R(C::*)(__A2__)){ return ArgsSummaryT<__A2__>(); }
-	template <class C, class R, __C3__> str_t ArgsSummary(R(C::*)(__A3__)){ return ArgsSummaryT<__A3__>(); }
-	template <class C, class R, __C4__> str_t ArgsSummary(R(C::*)(__A4__)){ return ArgsSummaryT<__A4__>(); }
-	template <class C, class R, __C5__> str_t ArgsSummary(R(C::*)(__A5__)){ return ArgsSummaryT<__A5__>(); }
-	template <class C, class R, __C6__> str_t ArgsSummary(R(C::*)(__A6__)){ return ArgsSummaryT<__A6__>(); }
-	template <class C, class R, __C7__> str_t ArgsSummary(R(C::*)(__A7__)){ return ArgsSummaryT<__A7__>(); }
-	template <class C, class R, __C8__> str_t ArgsSummary(R(C::*)(__A8__)){ return ArgsSummaryT<__A8__>(); }
-	// メンバ関数（const）
-	template <class C, class R> str_t ArgsSummary(R(C::*)()const){ return ArgsSummaryT(); }
-	template <class C, class R, __C1__> str_t ArgsSummary(R(C::*)(__A1__)const){ return ArgsSummaryT<__A1__>(); }
-	template <class C, class R, __C2__> str_t ArgsSummary(R(C::*)(__A2__)const){ return ArgsSummaryT<__A2__>(); }
-	template <class C, class R, __C3__> str_t ArgsSummary(R(C::*)(__A3__)const){ return ArgsSummaryT<__A3__>(); }
-	template <class C, class R, __C4__> str_t ArgsSummary(R(C::*)(__A4__)const){ return ArgsSummaryT<__A4__>(); }
-	template <class C, class R, __C5__> str_t ArgsSummary(R(C::*)(__A5__)const){ return ArgsSummaryT<__A5__>(); }
-	template <class C, class R, __C6__> str_t ArgsSummary(R(C::*)(__A6__)const){ return ArgsSummaryT<__A6__>(); }
-	template <class C, class R, __C7__> str_t ArgsSummary(R(C::*)(__A7__)const){ return ArgsSummaryT<__A7__>(); }
-	template <class C, class R, __C8__> str_t ArgsSummary(R(C::*)(__A8__)const){ return ArgsSummaryT<__A8__>(); }
 
 //---------------------------------------------------------------------------
 //	引数マスク
 //---------------------------------------------------------------------------
-	// ベース
-	str_t ArgsMaskT(){ return str_t("."); }
-	template <__C1__> str_t ArgsMaskT(){ return str_t(".") + X<A1>::m; }
-	template <__C2__> str_t ArgsMaskT(){ return str_t(".") + X<A1>::m + X<A2>::m; }
-	template <__C3__> str_t ArgsMaskT(){ return str_t(".") + X<A1>::m + X<A2>::m + X<A3>::m; }
-	template <__C4__> str_t ArgsMaskT(){ return str_t(".") + X<A1>::m + X<A2>::m + X<A3>::m + X<A4>::m; }
-	template <__C5__> str_t ArgsMaskT(){ return str_t(".") + X<A1>::m + X<A2>::m + X<A3>::m + X<A4>::m + X<A5>::m; }
-	template <__C6__> str_t ArgsMaskT(){ return str_t(".") + X<A1>::m + X<A2>::m + X<A3>::m + X<A4>::m + X<A5>::m + X<A6>::m; }
-	template <__C7__> str_t ArgsMaskT(){ return str_t(".") + X<A1>::m + X<A2>::m + X<A3>::m + X<A4>::m + X<A5>::m + X<A6>::m + X<A7>::m; }
-	template <__C8__> str_t ArgsMaskT(){ return str_t(".") + X<A1>::m + X<A2>::m + X<A3>::m + X<A4>::m + X<A5>::m + X<A6>::m + X<A7>::m + X<A8>::m; }
-	// 通常関数
-	template <class R> str_t ArgsMask(R(*)()){ return ArgsMaskT(); }
-	template <class R, __C1__> str_t ArgsMask(R(*)(__A1__)){ return ArgsMaskT<__A1__>(); }
-	template <class R, __C2__> str_t ArgsMask(R(*)(__A2__)){ return ArgsMaskT<__A2__>(); }
-	template <class R, __C3__> str_t ArgsMask(R(*)(__A3__)){ return ArgsMaskT<__A3__>(); }
-	template <class R, __C4__> str_t ArgsMask(R(*)(__A4__)){ return ArgsMaskT<__A4__>(); }
-	template <class R, __C5__> str_t ArgsMask(R(*)(__A5__)){ return ArgsMaskT<__A5__>(); }
-	template <class R, __C6__> str_t ArgsMask(R(*)(__A6__)){ return ArgsMaskT<__A6__>(); }
-	template <class R, __C7__> str_t ArgsMask(R(*)(__A7__)){ return ArgsMaskT<__A7__>(); }
-	template <class R, __C8__> str_t ArgsMask(R(*)(__A8__)){ return ArgsMaskT<__A8__>(); }
-	// メンバ関数
-	template <class C, class R> str_t ArgsMask(R(C::*)()){ return ArgsMaskT(); }
-	template <class C, class R, __C1__> str_t ArgsMask(R(C::*)(__A1__)){ return ArgsMaskT<__A1__>(); }
-	template <class C, class R, __C2__> str_t ArgsMask(R(C::*)(__A2__)){ return ArgsMaskT<__A2__>(); }
-	template <class C, class R, __C3__> str_t ArgsMask(R(C::*)(__A3__)){ return ArgsMaskT<__A3__>(); }
-	template <class C, class R, __C4__> str_t ArgsMask(R(C::*)(__A4__)){ return ArgsMaskT<__A4__>(); }
-	template <class C, class R, __C5__> str_t ArgsMask(R(C::*)(__A5__)){ return ArgsMaskT<__A5__>(); }
-	template <class C, class R, __C6__> str_t ArgsMask(R(C::*)(__A6__)){ return ArgsMaskT<__A6__>(); }
-	template <class C, class R, __C7__> str_t ArgsMask(R(C::*)(__A7__)){ return ArgsMaskT<__A7__>(); }
-	template <class C, class R, __C8__> str_t ArgsMask(R(C::*)(__A8__)){ return ArgsMaskT<__A8__>(); }
-	// メンバ関数（const）
-	template <class C, class R> str_t ArgsMask(R(C::*)()const){ return ArgsMaskT(); }
-	template <class C, class R, __C1__> str_t ArgsMask(R(C::*)(__A1__)const){ return ArgsMaskT<__A1__>(); }
-	template <class C, class R, __C2__> str_t ArgsMask(R(C::*)(__A2__)const){ return ArgsMaskT<__A2__>(); }
-	template <class C, class R, __C3__> str_t ArgsMask(R(C::*)(__A3__)const){ return ArgsMaskT<__A3__>(); }
-	template <class C, class R, __C4__> str_t ArgsMask(R(C::*)(__A4__)const){ return ArgsMaskT<__A4__>(); }
-	template <class C, class R, __C5__> str_t ArgsMask(R(C::*)(__A5__)const){ return ArgsMaskT<__A5__>(); }
-	template <class C, class R, __C6__> str_t ArgsMask(R(C::*)(__A6__)const){ return ArgsMaskT<__A6__>(); }
-	template <class C, class R, __C7__> str_t ArgsMask(R(C::*)(__A7__)const){ return ArgsMaskT<__A7__>(); }
-	template <class C, class R, __C8__> str_t ArgsMask(R(C::*)(__A8__)const){ return ArgsMaskT<__A8__>(); }
-	// Squirrelネイティブ
-	cstr_t ArgsMask(SQFUNCTION){ return 0; }
-
-//---------------------------------------------------------------------------
-//	通常関数
-//---------------------------------------------------------------------------
-	template <class R>
-	struct FuncProxyT{
-		template <class F> static int_t F0(HSQUIRRELVM v){ try{ return Res(v)( GetFunc<F>(v)() ); }__CATCH__ }
-		template <class F> static int_t F1(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( GetFunc<F>(v)(a[1]) ); }__CATCH__ }
-		template <class F> static int_t F2(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( GetFunc<F>(v)(a[1],a[2]) ); }__CATCH__ }
-		template <class F> static int_t F3(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( GetFunc<F>(v)(a[1],a[2],a[3]) ); }__CATCH__ }
-		template <class F> static int_t F4(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( GetFunc<F>(v)(a[1],a[2],a[3],a[4]) ); }__CATCH__ }
-		template <class F> static int_t F5(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( GetFunc<F>(v)(a[1],a[2],a[3],a[4],a[5]) ); }__CATCH__ }
-		template <class F> static int_t F6(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( GetFunc<F>(v)(a[1],a[2],a[3],a[4],a[5],a[6]) ); }__CATCH__ }
-		template <class F> static int_t F7(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( GetFunc<F>(v)(a[1],a[2],a[3],a[4],a[5],a[6],a[7]) ); }__CATCH__ }
-		template <class F> static int_t F8(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( GetFunc<F>(v)(a[1],a[2],a[3],a[4],a[5],a[6],a[7],a[8]) ); }__CATCH__ }
-		static int_t FV(HSQUIRRELVM v){ try{ return Res(v)( GetFunc<int_t(*)(Arg&)>(v)(Arg(v)) ); }__CATCH__ }
+	// 結合
+	template <class... Types> struct TypeMask;
+	template <> struct TypeMask<> {
+		static SQstring mask(){ return SQstring(); }
+		static SQstring tag(){  return SQstring(); }
 	};
-	template <>
-	struct FuncProxyT<void>{
-		template <class F> static int_t F0(HSQUIRRELVM v){ try{ GetFunc<F>(v)(); return 0;}__CATCH__ }
-		template <class F> static int_t F1(HSQUIRRELVM v){ try{ Arg a(v); GetFunc<F>(v)(a[1]); return 0;}__CATCH__ }
-		template <class F> static int_t F2(HSQUIRRELVM v){ try{ Arg a(v); GetFunc<F>(v)(a[1],a[2]); return 0;}__CATCH__ }
-		template <class F> static int_t F3(HSQUIRRELVM v){ try{ Arg a(v); GetFunc<F>(v)(a[1],a[2],a[3]); return 0;}__CATCH__ }
-		template <class F> static int_t F4(HSQUIRRELVM v){ try{ Arg a(v); GetFunc<F>(v)(a[1],a[2],a[3],a[4]); return 0;}__CATCH__ }
-		template <class F> static int_t F5(HSQUIRRELVM v){ try{ Arg a(v); GetFunc<F>(v)(a[1],a[2],a[3],a[4],a[5]); return 0;}__CATCH__ }
-		template <class F> static int_t F6(HSQUIRRELVM v){ try{ Arg a(v); GetFunc<F>(v)(a[1],a[2],a[3],a[4],a[5],a[6]); return 0;}__CATCH__ }
-		template <class F> static int_t F7(HSQUIRRELVM v){ try{ Arg a(v); GetFunc<F>(v)(a[1],a[2],a[3],a[4],a[5],a[6],a[7]); return 0;}__CATCH__ }
-		template <class F> static int_t F8(HSQUIRRELVM v){ try{ Arg a(v); GetFunc<F>(v)(a[1],a[2],a[3],a[4],a[5],a[6],a[7],a[8]); return 0;}__CATCH__ }
-		static int_t FV(HSQUIRRELVM v){ try{ GetFunc<int_t(*)(Arg&)>(v)(Arg(v)); return 0;}__CATCH__ }
-	};
-	template <class R> void Register(HSQUIRRELVM v, R f()){ BindFuncProxy(v, f, &FuncProxyT<R>::F0<R (*)()> ); }
-	template <class R, __C1__> void Register(HSQUIRRELVM v, R f(__A1__)){ BindFuncProxy(v, f, &FuncProxyT<R>::F1<R(*)(__A1__)> ); }
-	template <class R, __C2__> void Register(HSQUIRRELVM v, R f(__A2__)){ BindFuncProxy(v, f, &FuncProxyT<R>::F2<R(*)(__A2__)> ); }
-	template <class R, __C3__> void Register(HSQUIRRELVM v, R f(__A3__)){ BindFuncProxy(v, f, &FuncProxyT<R>::F3<R(*)(__A3__)> ); }
-	template <class R, __C4__> void Register(HSQUIRRELVM v, R f(__A4__)){ BindFuncProxy(v, f, &FuncProxyT<R>::F4<R(*)(__A4__)> ); }
-	template <class R, __C5__> void Register(HSQUIRRELVM v, R f(__A5__)){ BindFuncProxy(v, f, &FuncProxyT<R>::F5<R(*)(__A5__)> ); }
-	template <class R, __C6__> void Register(HSQUIRRELVM v, R f(__A6__)){ BindFuncProxy(v, f, &FuncProxyT<R>::F6<R(*)(__A6__)> ); }
-	template <class R, __C7__> void Register(HSQUIRRELVM v, R f(__A7__)){ BindFuncProxy(v, f, &FuncProxyT<R>::F7<R(*)(__A7__)> ); }
-	template <class R, __C8__> void Register(HSQUIRRELVM v, R f(__A8__)){ BindFuncProxy(v, f, &FuncProxyT<R>::F8<R(*)(__A8__)> ); }
-	// Squirrelネイティブ
-	void Register(HSQUIRRELVM v, SQFUNCTION f){ sq_newclosure(v, f, 0); }
-
-//---------------------------------------------------------------------------
-// メンバ関数
-//---------------------------------------------------------------------------
-	template <class C, class R>
-	struct MethodProxyT{
-		template <class M> static int_t F0(HSQUIRRELVM v){ try{ return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))() );}__CATCH__ }
-		template <class M> static int_t F1(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))(a[1]) );}__CATCH__ }
-		template <class M> static int_t F2(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2]) );}__CATCH__ }
-		template <class M> static int_t F3(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3]) );}__CATCH__ }
-		template <class M> static int_t F4(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4]) );}__CATCH__ }
-		template <class M> static int_t F5(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4],a[5]) );}__CATCH__ }
-		template <class M> static int_t F6(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4],a[5],a[6]) );}__CATCH__ }
-		template <class M> static int_t F7(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4],a[5],a[6],a[7]) );}__CATCH__ }
-		template <class M> static int_t F8(HSQUIRRELVM v){ try{ Arg a(v); return Res(v)( (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4],a[5],a[6],a[7],a[8]) );}__CATCH__ }
-	};
-	template <class C>
-	struct MethodProxyT<C,void>{
-		template <class M> static int_t F0(HSQUIRRELVM v){ try{ (GetInst<C>(v)->*GetMethod<M>(v))(); return 0;}__CATCH__ }
-		template <class M> static int_t F1(HSQUIRRELVM v){ try{ Arg a(v); (GetInst<C>(v)->*GetMethod<M>(v))(a[1]); return 0;}__CATCH__ }
-		template <class M> static int_t F2(HSQUIRRELVM v){ try{ Arg a(v); (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2]); return 0;}__CATCH__ }
-		template <class M> static int_t F3(HSQUIRRELVM v){ try{ Arg a(v); (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3]); return 0;}__CATCH__ }
-		template <class M> static int_t F4(HSQUIRRELVM v){ try{ Arg a(v); (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4]); return 0;}__CATCH__ }
-		template <class M> static int_t F5(HSQUIRRELVM v){ try{ Arg a(v); (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4],a[5]); return 0;}__CATCH__ }
-		template <class M> static int_t F6(HSQUIRRELVM v){ try{ Arg a(v); (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4],a[5],a[6]); return 0;}__CATCH__ }
-		template <class M> static int_t F7(HSQUIRRELVM v){ try{ Arg a(v); (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4],a[5],a[6],a[7]); return 0;}__CATCH__ }
-		template <class M> static int_t F8(HSQUIRRELVM v){ try{ Arg a(v); (GetInst<C>(v)->*GetMethod<M>(v))(a[1],a[2],a[3],a[4],a[5],a[6],a[7],a[8]); return 0;}__CATCH__ }
-	};
-	template <class C, class R> void Register(HSQUIRRELVM v, R(C::*m)()){ typedef R(C::*M)(); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F0<M> ); }
-	template <class C, class R, __C1__> void Register(HSQUIRRELVM v, R(C::*m)(__A1__)){ typedef R(C::*M)(__A1__); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F1<M> ); }
-	template <class C, class R, __C2__> void Register(HSQUIRRELVM v, R(C::*m)(__A2__)){ typedef R(C::*M)(__A2__); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F2<M> ); }
-	template <class C, class R, __C3__> void Register(HSQUIRRELVM v, R(C::*m)(__A3__)){ typedef R(C::*M)(__A3__); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F3<M> ); }
-	template <class C, class R, __C4__> void Register(HSQUIRRELVM v, R(C::*m)(__A4__)){ typedef R(C::*M)(__A4__); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F4<M> ); }
-	template <class C, class R, __C5__> void Register(HSQUIRRELVM v, R(C::*m)(__A5__)){ typedef R(C::*M)(__A5__); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F5<M> ); }
-	template <class C, class R, __C6__> void Register(HSQUIRRELVM v, R(C::*m)(__A6__)){ typedef R(C::*M)(__A6__); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F6<M> ); }
-	template <class C, class R, __C7__> void Register(HSQUIRRELVM v, R(C::*m)(__A7__)){ typedef R(C::*M)(__A7__); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F7<M> ); }
-	template <class C, class R, __C8__> void Register(HSQUIRRELVM v, R(C::*m)(__A8__)){ typedef R(C::*M)(__A8__); BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F8<M> ); }
-	template <class C, class R> void Register(HSQUIRRELVM v, R(C::*m)()const){ typedef R(C::*M)()const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F0<M> ); }
-	template <class C, class R, __C1__> void Register(HSQUIRRELVM v, R(C::*m)(__A1__)const){ typedef R(C::*M)(__A1__)const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F1<M> ); }
-	template <class C, class R, __C2__> void Register(HSQUIRRELVM v, R(C::*m)(__A2__)const){ typedef R(C::*M)(__A2__)const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F2<M> ); }
-	template <class C, class R, __C3__> void Register(HSQUIRRELVM v, R(C::*m)(__A3__)const){ typedef R(C::*M)(__A3__)const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F3<M> ); }
-	template <class C, class R, __C4__> void Register(HSQUIRRELVM v, R(C::*m)(__A4__)const){ typedef R(C::*M)(__A4__)const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F4<M> ); }
-	template <class C, class R, __C5__> void Register(HSQUIRRELVM v, R(C::*m)(__A5__)const){ typedef R(C::*M)(__A5__)const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F5<M> ); }
-	template <class C, class R, __C6__> void Register(HSQUIRRELVM v, R(C::*m)(__A6__)const){ typedef R(C::*M)(__A6__)const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F6<M> ); }
-	template <class C, class R, __C7__> void Register(HSQUIRRELVM v, R(C::*m)(__A7__)const){ typedef R(C::*M)(__A7__)const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F7<M> ); }
-	template <class C, class R, __C8__> void Register(HSQUIRRELVM v, R(C::*m)(__A8__)const){ typedef R(C::*M)(__A8__)const; BindMethodProxy(v, &m, sizeof(m), &MethodProxyT<C,R>::F8<M> ); }
-
-
-//---------------------------------------------------------------------------
-//	コンストラクター
-//---------------------------------------------------------------------------
-	template <class C>
-	struct CtorProxyT{
-		static int_t F0(HSQUIRRELVM v){ X<C*>::construct(v, new C() ); }
-		template <__C1__> static int_t F1(HSQUIRRELVM v){ Arg a(v); X<C*>::construct(v, new C( A1(a[1]) )); }
-		template <__C2__> static int_t F2(HSQUIRRELVM v){ Arg a(v); X<C*>::construct(v, new C( A1(a[1]), A2(a[2]) )); }
-		template <__C3__> static int_t F3(HSQUIRRELVM v){ Arg a(v); X<C*>::construct(v, new C( A1(a[1]), A2(a[2]), A3(a[3]) )); }
-		template <__C4__> static int_t F4(HSQUIRRELVM v){ Arg a(v); X<C*>::construct(v, new C( A1(a[1]), A2(a[2]), A3(a[3]), A4(a[4]) )); }
-		template <__C5__> static int_t F5(HSQUIRRELVM v){ Arg a(v); X<C*>::construct(v, new C( A1(a[1]), A2(a[2]), A3(a[3]), A4(a[4]), A5(a[5]) )); }
-		template <__C6__> static int_t F6(HSQUIRRELVM v){ Arg a(v); X<C*>::construct(v, new C( A1(a[1]), A2(a[2]), A3(a[3]), A4(a[4]), A5(a[5]), A6(a[6]) )); }
-		template <__C7__> static int_t F7(HSQUIRRELVM v){ Arg a(v); X<C*>::construct(v, new C( A1(a[1]), A2(a[2]), A3(a[3]), A4(a[4]), A5(a[5]), A6(a[6]), A7(a[7]) )); }
-		template <__C8__> static int_t F8(HSQUIRRELVM v){ Arg a(v); X<C*>::construct(v, new C( A1(a[1]), A2(a[2]), A3(a[3]), A4(a[4]), A5(a[5]), A6(a[6]), A7(a[7]), A8(a[8]) )); }
+	template <class T, class... Types> struct TypeMask<T, Types...> {
+		static SQstring mask(){ return X<std::decay<T>::type>::mask + TypeMask<Types...>::mask(); }
+		static SQstring tag(){  return X<std::decay<T>::type>::tag  + TypeMask<Types...>::tag(); }
 	};
 
-//---------------------------------------------------------------------------
-// バインダー
-//---------------------------------------------------------------------------
-	struct binder_t{
-		binder_t(HSQUIRRELVM vm, int_t target, cstr_t name):
-			vm_(vm), base_(sq_gettop(vm)), target_(target), name_(name), overload_(0){}
-		const HSQUIRRELVM vm_;
-		const int_t base_;
-		const int_t target_;
-		const cstr_t name_;
-		int_t overload_;
-		~binder_t(){
-			if(overload_){
-				sq_pushstring(vm_, name_, -1);
-				sq_push(vm_, overload_);
-				sq_newclosure(vm_, overload_callback, 1);
-				sq_newslot(vm_, target_, false);
+	// 関数用マスク
+	template <class... A> SQstring type_mask(){ return "." + TypeMask<A...>::mask(); }
+	template <         class R, class... A> SQstring args_mask(R(   *f)(A...)     ){ return type_mask<A...>(); }
+	template <class C, class R, class... A> SQstring args_mask(R(C::*f)(A...)     ){ return type_mask<A...>(); }
+	template <class C, class R, class... A> SQstring args_mask(R(C::*f)(A...)const){ return type_mask<A...>(); }
+
+	// オーバーロード用タグ
+	template <class... A> SQstring type_tag(){ return TypeMask<A...>::tag(); }
+	template <         class R, class... A> SQstring args_tag(R(   *f)(A...)     ){ return type_tag<A...>(); }
+	template <class C, class R, class... A> SQstring args_tag(R(C::*f)(A...)     ){ return type_tag<A...>(); }
+	template <class C, class R, class... A> SQstring args_tag(R(C::*f)(A...)const){ return type_tag<A...>(); }
+
+	// 実行時引数タグ（オーバーロード用）
+	SQstring args_code(HSQUIRRELVM vm){
+		size_t size = sq_gettop(vm);
+		SQsstream s;
+		for (size_t i = 2; i <= size; ++i){
+			switch (sq_gettype(vm, i)){
+			case OT_INTEGER: s << 'i'; continue;
+			case OT_FLOAT:   s << 'f'; continue;
+			case OT_BOOL:    s << 'b'; continue;
+			case OT_STRING:  s << 's'; continue;
 			}
+			SQUserPointer tag = 0;
+			sq_gettypetag(vm, i, &tag);
+			if(tag){ s << static_cast<SQcstr>(tag); }
 		}
-		static int_t overload_callback(HSQUIRRELVM vm){
-			size_t size = sq_gettop(vm) - 1;
-			sq_pushstring(vm, ArgsSummary(vm).c_str(), -1);
-			if( SQ_FAILED(sq_get(vm, -2)) )return SQ_ERROR;
-			for(size_t i=1; i<=size; ++i){ sq_push(vm, i); }
-			sq_call(vm, size, true, true);
-			return 1;
-		}
-		void overload(){
-			if(!overload_){ overload_ = newtable(vm_); }
-		}
+		return s.str();
+	}
 
-		template <class T>
-		binder_t& Bind(T t){
-			sq_pushstring(vm_, name_, -1);
-			Register(vm_, t);
-			sq_newslot(vm_, target_, false);
-			return *this;
-		}
-		template <class T>
-		binder_t& Overload(T t){
-			overload();
-			sq_pushstring(vm_, ArgsSummary(t).c_str(), -1);
-			Register(vm_, t);
-			sq_newslot(vm_, overload_, false);
-			return *this;
-		}
-		template <class T>
-		void Set(const T& val){
-			sq_pushstring(vm_,name_,-1);
-			X<T>::put(vm_,val);
-			sq_set(vm_, target_);
-		}
-		template <class T>
-		T Get(){
-			sq_pushstring(vm_,name_,-1);
-			if( SQ_FAILED(sq_get(vm_, target_)) )return T();
-			return X<T>::get(vm,-1);
-		}
-		template <class T> binder_t& operator <= (T t){ return Bind<T>(t); }
-		template <class T> binder_t& operator << (T t){ return Overload<T>(t); }
-		template <class T> operator = (const T& val){ Set<T>(t); }
-		template <class T> operator T (){ return Get<T>(); }
+//------------------------------------------------------------------
+//	スタブ
+//------------------------------------------------------------------
+	template <class F>
+	struct Stub;
+
+	// 終端（戻り値有無での分岐）
+	template <>	struct Stub<void()> {
+		template <class F> static int call(HSQUIRRELVM vm, SQInteger index, F f) { f(); return 0; }
+	};
+	template <class R> struct Stub<R()> {
+		template <class F> static int call(HSQUIRRELVM vm, SQInteger index, F f) { X<R>::push(vm, f()); return 1; }
 	};
 
-	template <class C>
-	struct ctor_binder_t:binder_t{
-		ctor_binder_t(HSQUIRRELVM vm, int_t target):
-			binder_t(vm, target, "constructor")
-		{ bind( "", &CtorProxyT<C>::F0); }
-		void bind(const str_t& name, SQFUNCTION func){
-			overload();
-			sq_pushstring(vm_, name.c_str(), -1);
-			sq_newclosure(vm_, func, 0);
-			sq_newslot(vm_, overload_, false);
+	// 再起処理部分（引数取り出し）
+	template <class R, class T, class... A>
+	struct Stub<R(T, A...)> {
+		template <class F>
+		static int call(HSQUIRRELVM vm, SQInteger index, F f) {
+			T val = X<std::decay<T>::type>::get(vm, index);
+			return Stub<R(A...)>::call(vm, index + 1, [&](A ...a){ return f(val, a...); });
 		}
-		template <__C1__> ctor_binder_t& Ctor(){ bind( ArgsSummaryT<__A1__>(), &CtorProxyT<C>::F1<__A1__>); return *this; }
-		template <__C2__> ctor_binder_t& Ctor(){ bind( ArgsSummaryT<__A2__>(), &CtorProxyT<C>::F2<__A2__>); return *this; }
-		template <__C3__> ctor_binder_t& Ctor(){ bind( ArgsSummaryT<__A3__>(), &CtorProxyT<C>::F3<__A3__>); return *this; }
-		template <__C4__> ctor_binder_t& Ctor(){ bind( ArgsSummaryT<__A4__>(), &CtorProxyT<C>::F4<__A4__>); return *this; }
-		template <__C5__> ctor_binder_t& Ctor(){ bind( ArgsSummaryT<__A5__>(), &CtorProxyT<C>::F5<__A5__>); return *this; }
-		template <__C6__> ctor_binder_t& Ctor(){ bind( ArgsSummaryT<__A6__>(), &CtorProxyT<C>::F6<__A6__>); return *this; }
-		template <__C7__> ctor_binder_t& Ctor(){ bind( ArgsSummaryT<__A7__>(), &CtorProxyT<C>::F7<__A7__>); return *this; }
-		template <__C8__> ctor_binder_t& Ctor(){ bind( ArgsSummaryT<__A8__>(), &CtorProxyT<C>::F8<__A8__>); return *this; }
 	};
 
-//---------------------------------------------------------------------------
-// 配列
-//---------------------------------------------------------------------------
-	struct array_t{
-		const HSQUIRRELVM vm_;
-		const int_t self_;
-		array_t(HSQUIRRELVM vm, int_t self): vm_(vm), self_(self){}
-		~array_t(){ sq_settop(vm_, self_-1); }
-		template <class T>
-		Push(const T& val){
-			X<T>::put(vm_,val);
-			sq_arrayappend(vm_, self_);
+	// メンバー関数用始点
+	template <class R, class C, class... A>
+	struct Stub<R(C::*)(A...)> {
+		template <class F>
+		static int call(HSQUIRRELVM vm, SQInteger index, F f) {
+			C* inst = X<C*>::get(vm, 1);
+			return Stub<R(A...)>::call(vm, index, [&](A ...a){ return (inst->*f)(a...); });
 		}
-		void Pop(){ sq_arraypop(vm_, self_, false); }
-		void Resize(size_t size){ sq_arrayresize(vm_, self_, size); }
-		void Reverse(){ sq_arrayreverse(vm_, self_); }
 	};
+
+	// 通常関数スタブ
+	template <class F>
+	SQInteger FunctionStub(HSQUIRRELVM vm)try{
+		F f;
+		sq_getuserpointer(vm, -1, reinterpret_cast<SQUserPointer*>(&f));
+		return Stub<std::remove_pointer<F>::type>::call(vm, 2, *f);
+	}catch (std::exception& e) {
+		return sq_throwerror(vm, (string("error in function: ") + e.what()).c_str());
+	}
+
+	// メンバー関数スタブ
+	template <class F>
+	SQInteger MemberStub(HSQUIRRELVM vm)try{
+		F *f;
+		sq_getuserdata(vm, -1, reinterpret_cast<SQUserPointer*>(&f), nullptr);
+		return Stub<F>::call(vm, 2, *f);
+	}catch (std::exception& e){
+		return sq_throwerror(vm, (string("error in member: ") + e.what()).c_str());
+	}
+
+	// コンストラクター用スタブ
+	template <class C, class... A>
+	SQInteger CtorStub(HSQUIRRELVM vm)try{
+		return Stub<void(A...)>::call(vm, 2, [&](A ...a){
+			sq_setinstanceup(vm, 1, new C(a...));
+			sq_setreleasehook(vm, 1, [](SQUserPointer p, SQInteger)->int{ delete static_cast<C*>(p); return 0; });
+		});
+	}catch (std::exception& e) {
+		return sq_throwerror(vm, (string("error in constructor: ") + e.what()).c_str());
+	}
+
+	// オーバーロード用スタブ
+	SQInteger OverloadStub(HSQUIRRELVM vm){
+		size_t size = sq_gettop(vm) - 1;
+		sq_pushstring(vm, args_code(vm).c_str(), -1);
+		if( SQ_FAILED(sq_get(vm, -2)) )return SQ_ERROR;
+		for(size_t i=1; i<=size; ++i){ sq_push(vm, i); }
+		sq_call(vm, size, SQTrue, SQTrue);
+		return 1;
+	}
 
 //---------------------------------------------------------------------------
 // テーブル
 //---------------------------------------------------------------------------
-	struct table_t{
-		const HSQUIRRELVM vm_;
-		const int_t self_;
-		table_t(HSQUIRRELVM vm, int_t self):vm_(vm), self_(self){}
-		~table_t(){ sq_settop(vm_, self_-1); }
 
-		friend void Bind(table_t& base, table_t& item, cstr_t name){
-				sq_pushstring(base.vm_, name, -1);
-				sq_push(base.vm_, item.self_);
-				sq_newslot(base.vm_, base.self_, false);
+	class Table{
+	protected:
+		HSQUIRRELVM vm;
+		SQInteger self;
+
+		Table(Table&& t):vm(t.vm), self(t.self){ t.self=0; }
+		Table(const Table& t):vm(t.vm){ sq_push(vm, t.self); self=sq_gettop(vm); }
+		Table& operator =(Table&&) = delete;
+	    Table& operator =(Table const&) = delete;
+
+		Table(HSQUIRRELVM vm, SQInteger self): vm(vm), self(self){}
+
+	public:
+		Table(HSQUIRRELVM vm): vm(vm), self(newtable(vm)){}
+		~Table(){ if(self)sq_settop(vm, self-1); }
+
+		// アクセス
+		class Accessor{
+			friend Table;
+			HSQUIRRELVM vm;
+			SQInteger self;
+			SQInteger overload;
+
+			Accessor(Accessor&& a): vm(a.vm), self(a.self), overload(a.overload){ a.overload=0; }
+			Accessor(const Accessor&) = delete;
+			Accessor& operator =(Accessor&&) = delete;
+			Accessor& operator =(Accessor const&) = delete;
+
+			Accessor(HSQUIRRELVM vm, SQInteger self, SQcstr name):
+				vm(vm), self(self), overload(0){ sq_pushstring(vm, name, -1); }
+		public:
+			~Accessor(){
+				if(overload){
+					assert(sq_gettop(vm)==overload);
+					sq_newclosure(vm, OverloadStub, 1);
+					sq_newslot(vm, self, SQFalse);
+				}
+			}
+
+			// バインド
+			template <class T>
+			const Accessor& operator <= (T t){
+				ObjectTraits<T>::push(vm, t);
+				sq_newslot(vm, self, SQFalse);
+				return *this;
+			}
+
+			// オーバーロード
+			template <class T>
+			Accessor& operator << (T t){
+				if(!overload)overload = newtable(vm);
+				sq_pushstring(vm, args_tag(t).c_str(), -1);
+				ObjectTraits<T>::push(vm, t);
+				sq_newslot(vm, overload, SQFalse);
+				return *this;
+			}
+
+			// 設定
+			template <class T>
+			const Accessor& operator = (const T& val){
+				X<T>::push(vm, val);
+				sq_set(vm, self);
+				return *this;
+			}
+
+			// 取得
+			template <class T>
+			operator T(){
+				if( SQ_FAILED(sq_get(vm, self)) )return T();
+				T val = X<T>::get(vm, -1);
+				sq_pop(vm, 1);
+				return val;
+			}
+		};
+
+		Table::Table(const Accessor& a) : vm(a.vm), self(0){
+			if( SQ_FAILED(sq_get(vm, a.self)) )sq_newtable(vm);
+			self = sq_gettop(vm);
 		}
-		binder_t operator[](cstr_t name){ return binder_t(vm_, self_, name); }
+
+		Accessor operator[](SQcstr name){ return Accessor(vm, self, name); }
+
+		static void push(HSQUIRRELVM vm, Table& t){
+			sq_push(vm, t.self);
+		}
 	};
+
 	// ルートテーブル
-	struct root_table_t:table_t{
-		root_table_t(HSQUIRRELVM vm):table_t(vm, (sq_pushroottable(vm), sq_gettop(vm))){}
-		~root_table_t(){ sq_poptop(vm_); }
+	struct RootTable:Table{
+		RootTable(HSQUIRRELVM vm): Table(vm, (sq_pushroottable(vm), sq_gettop(vm))){}
 	};
 	// 定数テーブル
-	struct const_table_t:table_t{
-		const_table_t(HSQUIRRELVM vm):table_t(vm, (sq_pushconsttable(vm), sq_gettop(vm))){}
-		~const_table_t(){ sq_poptop(vm_); }
+	struct ConstTable:Table{
+		ConstTable(HSQUIRRELVM vm): Table(vm, (sq_pushconsttable(vm), sq_gettop(vm))){}
 	};
 
-//---------------------------------------------------------------------------
-// クラス
-//---------------------------------------------------------------------------
+	// クラス
 	template <class C>
-	struct class_t:table_t{
-		class_t(HSQUIRRELVM vm):table_t(vm, X<C*>::init(vm)){}
+	class Class: public Table{
+	public:
+		Class(HSQUIRRELVM vm):
+			Table(vm, (X<C>::push_class(vm), sq_gettop(vm))){}
 
-		ctor_binder_t<C> Ctor(){ return ctor_binder_t<C>(vm_,self_); }
-		binder_t operator[](cstr_t name){ return binder_t(vm_, self_, name); }
+		// コンストラクター定義
+		template <class C>
+		class Ctor{
+			HSQUIRRELVM vm;
+			SQInteger target;
+			SQInteger self;
+
+		public:
+			Ctor(Ctor&&) = delete;
+			Ctor(const Ctor&) = delete;
+			Ctor& operator =(Ctor&&) = delete;
+			Ctor& operator =(Ctor const&) = delete;
+
+			Ctor(HSQUIRRELVM vm, SQInteger target):
+				vm(vm), target(target), self(newtable(vm)){}
+
+			~Ctor(){
+				assert(sq_gettop(vm)==self);
+				sq_newclosure(vm, OverloadStub, 1);
+				sq_newslot(vm, target, SQFalse);
+			}
+			template <class... A>
+			Ctor& New(){
+				sq_pushstring(vm, type_tag<A...>().c_str(), -1);
+				sq_newclosure(vm, CtorStub<C, A...>, 0);
+				sq_newslot(vm, self, SQFalse);
+				return *this;
+			}
+		};
+		Ctor<C> operator()(){
+			sq_pushstring(vm, "constructor", -1);
+			return Ctor<C>(vm, self);
+		}
 	};
 
 //---------------------------------------------------------------------------
-//	
+//	バインド
 //---------------------------------------------------------------------------
-}
-typedef implements::section_t Section;
-typedef implements::root_table_t RootTable;
-typedef implements::const_table_t ConstTable;
-typedef implements::table_t Table;
-typedef implements::class_t Class;
-}
+	// 関数
+	template <class P>
+	struct BindFunc{
+		template <class F>
+		static void push(HSQUIRRELVM vm, F f){
+			auto p = static_cast<P>(f);
+			sq_pushuserpointer(vm, p);
+			sq_newclosure(vm, FunctionStub<P>, 1);
+			sq_setparamscheck(vm, SQ_MATCHTYPEMASKSTRING, args_mask(p).c_str());
+		}
+	};
+
+	// メンバー関数
+	template <class P>
+	struct BindMember{
+		template <class F>
+		static void push(HSQUIRRELVM vm, F f){
+			memcpy(sq_newuserdata(vm, sizeof(f)), &f, sizeof(f));
+			sq_newclosure(vm, MemberStub<P>, 1);
+			sq_setparamscheck(vm, SQ_MATCHTYPEMASKSTRING, args_mask(f).c_str());
+		}
+	};
+
+	// 処理の切り分け（関数）
+	template <class F> struct FunctorTraits;
+	template <class R, class C, class... A> struct FunctorTraits <R(C::*)(A...)>      :BindFunc<R(*)(A...)>{};
+	template <class R, class C, class... A> struct FunctorTraits <R(C::*)(A...)const> :BindFunc<R(*)(A...)>{};
+	template <class F> struct FunctionTraits : FunctorTraits <decltype(&F::operator())>{};
+	template <class R, class... A> struct FunctionTraits <R(*)(A...)> : BindFunc<R(*)(A...)>{};
+	template <class R, class C, class... A> struct FunctionTraits <R(C::*)(A...)>      :BindMember<R(C::*)(A...)>{};
+	template <class R, class C, class... A> struct FunctionTraits <R(C::*)(A...)const> :BindMember<R(C::*)(A...)>{};
+	template <class F> struct ObjectTraits : FunctionTraits<F>{};
+
+	// ↓処理の切り分け（その他）
+
+	// テーブル
+	template <> struct ObjectTraits<Table> : Table{};
+	template <> struct ObjectTraits<RootTable> : Table{};
+	template <> struct ObjectTraits<ConstTable> : Table{};
+	template <class C> struct ObjectTraits<Class<C>> : Table{};
+
+	// 生のコールバック
+	template <> struct ObjectTraits<SQFUNCTION>{
+		static void push(HSQUIRRELVM vm, SQFUNCTION f){
+			sq_newclosure(vm, f, 0);
+		}
+	};
 
 //---------------------------------------------------------------------------
-//	マクロの後始末
+// 配列はひとまず保留
 //---------------------------------------------------------------------------
-#undef SQ_SETPARAMSCHECK
-#undef SQ_SETNATIVECLOSURENAME
-#undef __C1__
-#undef __C2__
-#undef __C3__
-#undef __C4__
-#undef __C5__
-#undef __C6__
-#undef __C7__
-#undef __C8__
-#undef __A1__
-#undef __A2__
-#undef __A3__
-#undef __A4__
-#undef __A5__
-#undef __A6__
-#undef __A7__
-#undef __A8__
-#undef __CATCH__
-//---------------------------------------------------------------------------
+/*
+	struct Array{
+		const HSQUIRRELVM vm;
+		const SQInteger self;
+		Array(HSQUIRRELVM vm, SQInteger self): vm(vm), self(self){}
+		~Array(){ sq_settop(vm, self-1); }
+		template <class T>
+		void Append(const T& val){
+			X<T>::push(vm, val);
+			sq_arrayappend(vm, self);
+		}
+		void Pop(){ sq_arraypop(vm, self); }
+		void Resize(SQInteger size){ sq_arrayresize(vm, self, size); }
+		void Reverse(){ sq_arrayreverse(vm, self); }
+	};
+*/
+
+}
+	using detail::Table;
+	using detail::Class;
+	using detail::RootTable;
+	using detail::ConstTable;
+}
