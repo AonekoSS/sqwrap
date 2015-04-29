@@ -6,9 +6,9 @@ sqwrap（スクラップ）
 
 制限とか
 ------
-バインドできる関数およびメソッドの引数は8個までです。  
-（C++11の可変長引数テンプレートに対応してないコンパイラとかでも大丈夫）
-
+Squirrelのバージョンは3.0.7で調整しました。（たぶん2.2.5でも大丈夫？）
+C++11対応で可変長引数テンプレートとか使える環境が必要です。
+（Visual Studioだと2013以降くらい？）
 
 関数のバインド（オーバーロードの例）
 ------
@@ -31,10 +31,10 @@ sqwrap（スクラップ）
 		// 引数の違う関数をひとつの名前にまとめてバインド
 		root["FunctionV"] << FunctionInteger << FunctionString;
 	
-		// C++側でオーバーロードされてる場合はちょっと複雑
+		// C++側でオーバーロードされてる場合は明示的に取り出す必要あり
 		root["FunctionO"]
-			.Overload<void(*)(int)>(OverloadFunction)
-			.Overload<void(*)(int,int)>(OverloadFunction);
+			<< static_cast<void(*)(int)>(OverloadFunction)
+			<< static_cast<void(*)(int,int)>(OverloadFunction);
 	}
 
 
